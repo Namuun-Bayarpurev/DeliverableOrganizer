@@ -1,0 +1,236 @@
+﻿<Window x:Class="DeliverableOrganizer.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:DeliverableOrganizer.ViewModels"
+        xmlns:m="clr-namespace:DeliverableOrganizer.Models"
+        mc:Ignorable="d"
+        d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+        Title="納品物整理ツール"
+        Width="920" Height="860" MinWidth="760" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Yu Gothic UI" FontSize="13">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />  <!-- 共通設定 -->
+            <RowDefinition Height="*" />     <!-- 機能タブ -->
+            <RowDefinition Height="Auto" />  <!-- オプション -->
+            <RowDefinition Height="Auto" />  <!-- ボタン -->
+            <RowDefinition Height="Auto" />  <!-- 進捗 -->
+            <RowDefinition Height="170" />   <!-- ログ -->
+        </Grid.RowDefinitions>
+
+        <!-- ①〜③ 共通設定 -->
+        <Border Grid.Row="0" Style="{StaticResource Panel}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="出力先フォルダ" VerticalAlignment="Center" />
+                <TextBox x:Name="OutputFolderBox" Grid.Row="0" Grid.Column="1" Margin="0,0,8,6"
+                         Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="0" Grid.Column="2" Margin="0,0,0,6" Content="参照..."
+                        Command="{Binding BrowseOutputFolderCommand}" />
+
+                <TextBlock Grid.Row="1" Text="PAT" VerticalAlignment="Center" />
+                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <PasswordBox x:Name="PatBox" PasswordChanged="PatBox_PasswordChanged"
+                                 ToolTip="空欄なら環境変数 AZDO_PAT → Git 資格情報の順に使用します" />
+                    <CheckBox Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
+                              Content="保存する" IsChecked="{Binding SavePat}"
+                              ToolTip="Windows 資格情報マネージャーに保存します（未実装）" />
+                </Grid>
+
+                <TextBlock Grid.Row="2" Text="ローカルリポジトリ" VerticalAlignment="Center" />
+                <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,8,0">
+                    <TextBox x:Name="LocalRepoBox" Text="{Binding LocalRepository, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="8,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                               Foreground="{StaticResource SubTextBrush}"
+                               Text="（任意）指定すると git から高速に取得">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=LocalRepoBox}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+                <Button Grid.Row="2" Grid.Column="2" Content="参照..."
+                        Command="{Binding BrowseLocalRepositoryCommand}" />
+            </Grid>
+        </Border>
+
+        <!-- ④〜⑨ 機能タブ -->
+        <TabControl Grid.Row="1" Margin="0,12,0,0" Padding="12"
+                    ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <Setter Property="Padding" Value="16,6" />
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:CategoryTabViewModel}">
+                    <TextBlock Text="{Binding Header}" />
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate DataType="{x:Type vm:CategoryTabViewModel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- ⑤⑥ -->
+                        <TextBlock Grid.Row="0" Text="PR の URL（1 行に 1 つ）" Margin="0,0,0,4" />
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="UrlBox" Height="90" AcceptsReturn="True" TextWrapping="NoWrap"
+                                     VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     FontFamily="Consolas, Yu Gothic UI"
+                                     Text="{Binding UrlText, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button x:Name="ConfirmButton" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Top" Content="確認"
+                                    Command="{Binding DataContext.ConfirmCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        </Grid>
+
+                        <!-- ⑦ -->
+                        <TextBlock Grid.Row="2" Text="PR 一覧" Margin="0,10,0,4" />
+                        <DataGrid Grid.Row="3" MinHeight="90" ItemsSource="{Binding PrItems}"
+                                  AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#E6E6E6" SelectionMode="Single">
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Setter Property="ToolTip" Value="{Binding Url}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsError}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="PR 番号" Width="80" Binding="{Binding PullRequestId}" />
+                                <DataGridTextColumn Header="タイトル" Width="*" Binding="{Binding Title}" />
+                                <DataGridTextColumn Header="ブランチ" Width="160" Binding="{Binding Branch}" />
+                                <DataGridTextColumn Header="状態" Width="80" Binding="{Binding Status}" />
+                                <DataGridTextColumn Header="変更ファイル" Width="90" Binding="{Binding FileCountText}" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <!-- ⑧⑨ 仕様書／テストタブのみ -->
+                        <Grid Grid.Row="4" Margin="0,10,0,0"
+                              Visibility="{Binding ShowPatterns, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="対象パターン" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Text="{Binding Patterns, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="カンマ区切り（例: *.xlsx, */テスト仕様書/*）。空欄＝全変更ファイル" />
+                            <TextBlock Grid.Row="1" Margin="0,8,0,0" Text="出力範囲" VerticalAlignment="Center"
+                                       Visibility="{Binding ShowScope, Converter={StaticResource BoolToVisibility}}" />
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0" Orientation="Horizontal"
+                                        Visibility="{Binding ShowScope, Converter={StaticResource BoolToVisibility}}">
+                                <RadioButton Content="PR の変更分" IsChecked="{Binding IsScopeChanged}" Margin="0,0,20,0" />
+                                <RadioButton Content="PR 時点の全テスト仕様書" IsChecked="{Binding IsScopeAll}" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+
+        <!-- ⑩⑪ オプション -->
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <CheckBox Content="__PR情報.txt を出力" VerticalAlignment="Center" IsChecked="{Binding WritePrInfo}" />
+            <TextBlock Grid.Column="1" Text="既存フォルダ" VerticalAlignment="Center" Margin="0,0,10,0" />
+            <ComboBox Grid.Column="2" Width="180"
+                      ItemsSource="{Binding ExistingFolderOptions}"
+                      DisplayMemberPath="Label" SelectedValuePath="Mode"
+                      SelectedValue="{Binding ExistingFolder}" />
+        </Grid>
+
+        <!-- ⑫〜⑭ ボタン -->
+        <StackPanel Grid.Row="3" Margin="0,12,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="PreviewButton" Content="プレビュー" Command="{Binding PreviewCommand}" />
+            <Button x:Name="RunButton" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"
+                    Content="{Binding RunButtonText}" Command="{Binding RunOrCancelCommand}" />
+            <Button x:Name="OpenOutputButton" Margin="8,0,0,0" Content="出力先を開く" Command="{Binding OpenOutputCommand}" />
+        </StackPanel>
+
+        <!-- ⑮ 進捗 -->
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="80" />
+            </Grid.ColumnDefinitions>
+            <ProgressBar Height="10" Minimum="0" Maximum="{Binding ProgressMax}" Value="{Binding ProgressValue}" />
+            <TextBlock Grid.Column="1" HorizontalAlignment="Right" Foreground="{StaticResource SubTextBrush}"
+                       Text="{Binding ProgressText}" />
+        </Grid>
+
+        <!-- ⑯ ログ -->
+        <Border Grid.Row="5" Margin="0,10,0,0" Style="{StaticResource Panel}" Padding="0">
+            <ListBox x:Name="LogList" ItemsSource="{Binding Logs}" BorderThickness="0" Background="Transparent"
+                     FontFamily="Consolas, Yu Gothic UI" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type m:LogEntry}">
+                        <TextBlock Text="{Binding Display}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Level}" Value="{x:Static m:LogLevel.Warning}">
+                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Level}" Value="{x:Static m:LogLevel.Error}">
+                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+    </Grid>
+</Window>

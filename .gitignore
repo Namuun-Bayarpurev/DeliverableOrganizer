@@ -1,0 +1,24 @@
+## .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.rsuser
+*.cache
+*.log
+[Tt]est[Rr]esult*/
+publish/
+*.pubxml.user
+
+## IDE
+.vscode/
+.idea/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## 設計書（顧客資料のためリポジトリに含めない）
+*.docx
