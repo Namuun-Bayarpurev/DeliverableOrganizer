@@ -8,8 +8,8 @@ Azure DevOps の Pull Request（PR）の URL を入力するだけで、納品�
 
 ## 現在の状態
 
-**土台と画面のみ実装済み（2026-11-25 時点）。** PR 情報の取得やファイルの出力はまだ行わない。
-［確認］［実行］は画面の動作確認用の仮の動きになっている。
+**土台・画面と PR 情報の取得（C1）を実装済み（2026-11-25 時点）。** ファイルの出力はまだ行わない。
+［確認］は Azure DevOps から PR 情報を取得して PR 一覧に表示する。［実行］は画面の動作確認用の仮の動きになっている。
 
 ## 起動方法
 
@@ -17,7 +17,25 @@ Azure DevOps の Pull Request（PR）の URL を入力するだけで、納品�
 dotnet run --project C:\MOON_WORK\01_Tools\DeliverableOrganizer
 ```
 
-ビルドのみの場合は `dotnet build`。.NET 8 SDK が必要。
+ビルドのみの場合は `dotnet build`。.NET 8 SDK が必要。Visual Studio では `DeliverableOrganizer.sln`（本体とテスト）を開く。
+
+PR 情報の取得には、対象リポジトリの読み取り権限（Code: Read）を持つ PAT が要る。画面の PAT 欄に入れるか、環境変数 `AZDO_PAT` に設定しておく（画面の入力が優先）。
+
+## exe の作成
+
+```powershell
+dotnet publish DeliverableOrganizer.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+```
+
+`publish\DeliverableOrganizer.exe`（単一ファイル、約 0.4 MB）ができる。実行には .NET 8 デスクトップ ランタイムが要る。ランタイムなしで動かす場合は `--self-contained true` にする（サイズが大きくなる。どちらにするかは設計書 10 章の確認事項）。
+
+## テスト
+
+```powershell
+dotnet test tests\DeliverableOrganizer.Tests
+```
+
+URL 解析と、偽の HTTP 応答を使った PR 情報取得（ページング、再試行、認証エラー）の単体テスト。Azure DevOps には接続しない。
 
 ## フォルダ構成
 
@@ -35,9 +53,15 @@ DeliverableOrganizer/
 ├─ Models/
 │  ├─ Enums.cs                   Category, ExistingFolderMode, TestScope, ChangeType, LogLevel
 │  └─ PrModels.cs                PrRef, PrData, FileChange, CommitInfo, ExportOptions, LogEntry
-└─ Services/
-   ├─ IDialogService.cs          ViewModel から画面操作するための窓口
-   └─ DialogService.cs           フォルダ選択、プレビュー表示、エラー表示、エクスプローラー起動
+├─ Services/
+│  ├─ IDialogService.cs          ViewModel から画面操作するための窓口
+│  ├─ DialogService.cs           フォルダ選択、プレビュー表示、エラー表示、エクスプローラー起動
+│  ├─ PrUrlParser.cs             PR URL の解析（C1）
+│  ├─ CredentialProvider.cs      PAT の決定（C2。画面 → 環境変数 AZDO_PAT）
+│  ├─ AzureDevOpsClient.cs       REST API 呼び出し（C1。ページング、再試行 3 回）
+│  └─ PrLoader.cs                PR 情報を PrData にまとめる（C1。同じ PR は 1 回だけ取得）
+└─ tests/
+   └─ DeliverableOrganizer.Tests/  xUnit（本体の csproj は tests\ 配下を取り込まない設定にしている）
 ```
 
 ## 実装できたこと
@@ -55,7 +79,7 @@ DeliverableOrganizer/
 | 3 | ローカルリポジトリ＋［参照］ | 実装済み（未入力時はヒント表示） |
 | 4 | 機能タブ | 実装済み。タブ名に登録件数を表示（空行・重複は数えない） |
 | 5 | PR URL 入力（複数行） | 実装済み |
-| 6 | ［確認］ | 仮実装（URL 末尾から PR 番号を取り出すだけ） |
+| 6 | ［確認］ | 実装済み（URL 解析と PR 情報取得。認証エラーはその場で中断してダイアログ表示） |
 | 7 | PR 一覧 | 実装済み（PR 番号・タイトル・ブランチ・状態・変更ファイル数、エラー行は赤） |
 | 8 | 対象パターン | 実装済み（仕様書・テストタブのみ表示） |
 | 9 | 出力範囲 | 実装済み（テストタブのみ表示） |
@@ -78,19 +102,20 @@ DeliverableOrganizer/
 推奨する順番で並べている。
 
 ### 1. PR 情報の取得（C1）
-- [ ] `PrUrlParser`：dev.azure.com／*.visualstudio.com の URL から組織・プロジェクト・リポジトリ・PR 番号を取り出す
-  - 現在 `MainViewModel.TryGetTrailingId` にある表示用の簡易版を置き換える
-  - 形式が正しくない URL は実行対象から外す（今は件数に含めている）
-- [ ] `AzureDevOpsClient`：REST API（api-version 7.1、Basic 認証）、HttpClient、再試行 3 回
-  - `pullrequests/{id}`、`iterations`、`iterations/{n}/changes?$compareTo=0`（2000 件ごとのページング、フォルダは除外）、`commits`、`items`
-- [ ] `PrLoader`：PR・修正前 SHA（commonRefCommit）・修正後 SHA（sourceRefCommit）・変更一覧・コミット履歴を `PrData` にまとめる
-- [ ] ［確認］を本実装に置き換え、PR 一覧にタイトル・ブランチ・状態・変更ファイル数を表示
-- [ ] 同じ PR が複数タブにあっても取得は 1 回だけ行う
+- [x] `PrUrlParser`：dev.azure.com／*.visualstudio.com（DefaultCollection 付き、プロジェクト省略形も可）の URL から組織・プロジェクト・リポジトリ・PR 番号を取り出す
+- [ ] 形式が正しくない URL は実行対象から外す（今はタブの件数に含めている。［実行］の本実装と合わせて対応）
+- [x] `AzureDevOpsClient`：REST API（api-version 7.1、Basic 認証）、HttpClient、再試行 3 回（通信エラー・5xx・429）
+  - `pullrequests/{id}`、`iterations`、`iterations/{n}/changes?$compareTo=0`（2000 件ごとのページング、フォルダは除外）、`commits`（継続トークンでページング）
+  - `items`（ファイル内容・全ファイル一覧）は C3 で追加する
+- [x] `PrLoader`：PR・修正前 SHA（commonRefCommit）・修正後 SHA（sourceRefCommit）・変更一覧・コミット履歴（古い順）を `PrData` にまとめる
+- [x] ［確認］を本実装に置き換え、PR 一覧にタイトル・ブランチ・状態・変更ファイル数を表示
+- [x] 同じ PR は 1 回だけ取得する（`PrLoader` が 1 回の操作の中で結果を使い回す。［実行］でも 1 回の実行につき `PrLoader` を 1 つ作って使うこと）
 
 ### 2. 認証（C2）
-- [ ] `CredentialProvider`：画面の PAT → 環境変数 `AZDO_PAT` → `git credential fill` の順に使う
-- [ ] 認証エラー（401／403／203）で処理を中断し、「PAT の権限（Code: Read）を確認」ダイアログを出す
-- [ ] PAT をログに出さない
+- [x] `CredentialProvider`：画面の PAT → 環境変数 `AZDO_PAT` の順に使う
+- [ ] `git credential fill` を 3 番目の手段として追加する
+- [x] 認証エラー（401／403／203）で処理を中断し、「PAT の権限（Code: Read）を確認」ダイアログを出す（［確認］。［実行］は本実装時に `AzureDevOpsException.IsAuthError` で同様に止める）
+- [x] PAT をログに出さない（例外メッセージ・ログに PAT を含めていない）
 
 ### 3. ファイル取得（C3）
 - [ ] `IContentSource` / `GitContentSource`：`git cat-file blob {SHA}:{path}` で取得。コミットが無ければ `git fetch`
@@ -126,7 +151,7 @@ DeliverableOrganizer/
 - [ ] PAT を Windows 資格情報マネージャーに保存（「保存する」チェック）
 - [ ] 260 文字を超えるパスへの対応（`\\?\` 形式）
 - [ ] PR フォルダ名の書式設定（既定 `Pull Request {id}`）
-- [ ] 単体テスト（URL 解析、パターン一致、出力パスの組み立て）
+- [ ] 単体テスト（URL 解析と PR 情報取得は作成済み。パターン一致、出力パスの組み立てが残り）
 - [ ] 配布設定（単一 exe）
 
 ### 確認事項が決まってから実装するもの（設計書 10 章）

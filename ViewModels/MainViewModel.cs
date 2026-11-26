@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
-using System.Text.RegularExpressions;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeliverableOrganizer.Models;
@@ -15,6 +15,9 @@ public sealed record ExistingFolderOption(ExistingFolderMode Mode, string Label)
 /// <summary>メイン画面。共通設定、実行／中止、進捗、ログを持つ。</summary>
 public partial class MainViewModel : ObservableObject
 {
+    // HttpClient はアプリ全体で 1 つを使い回す（作り直すとソケットが枯渇する）
+    private static readonly HttpClient Http = new();
+
     private readonly IDialogService _dialogs;
     private CancellationTokenSource? _cts;
 
@@ -123,26 +126,81 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>⑥ 確認。URL 形式チェックと PR 情報取得（C1 は未実装）。</summary>
+    /// <summary>⑥ 確認。URL 形式チェックと PR 情報取得（C1）。結果を ⑦ PR 一覧に表示する。</summary>
     [RelayCommand(CanExecute = nameof(CanConfirm))]
-    private void Confirm()
+    private async Task ConfirmAsync()
     {
         var tab = SelectedTab;
         tab.PrItems.Clear();
+
+        // 先に全行を出してから順に取得する（形式が不正な行はその場でエラー表示）
+        var targets = new List<(PrItemViewModel Item, PrRef Pr)>();
         foreach (var url in tab.GetUrls())
         {
-            var id = TryGetTrailingId(url);
-            tab.PrItems.Add(new PrItemViewModel
+            var pr = PrUrlParser.TryParse(url);
+            var item = new PrItemViewModel
             {
                 Url = url,
-                PullRequestId = id,
-                Title = id is null ? "URL の形式が不正です" : "（PR 情報取得は未実装）",
-                IsError = id is null,
-            });
+                PullRequestId = pr?.PullRequestId,
+                Title = pr is null ? "URL の形式が不正です" : "取得中...",
+                IsError = pr is null,
+            };
+            tab.PrItems.Add(item);
+            if (pr is not null)
+            {
+                targets.Add((item, pr));
+            }
         }
 
-        Log(LogLevel.Info, $"[{tab.Name}] {tab.PrItems.Count} 件の URL を確認しました（PR 情報取得は未実装）");
+        var loader = new PrLoader(new AzureDevOpsClient(Http, CredentialProvider.ResolvePat(Pat)));
+        int loaded = 0;
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var (item, pr) = targets[i];
+            try
+            {
+                var data = await loader.LoadAsync(pr);
+                item.Title = data.Title;
+                item.Branch = $"{data.SourceBranch} → {data.TargetBranch}";
+                item.Status = StatusText(data.Status);
+                item.FileCount = data.Changes.Count;
+                loaded++;
+            }
+            catch (AzureDevOpsException ex) when (ex.IsAuthError)
+            {
+                // 認証エラーは他の PR でも同じなので、その場で止める
+                item.IsError = true;
+                item.Title = ex.Message;
+                foreach (var (rest, _) in targets.Skip(i + 1))
+                {
+                    rest.IsError = true;
+                    rest.Title = "認証エラーのため取得を中止しました";
+                }
+
+                Log(LogLevel.Error, $"[{tab.Name}] {ex.Message}");
+                _dialogs.ShowError(ex.Message);
+                return;
+            }
+            catch (AzureDevOpsException ex)
+            {
+                item.IsError = true;
+                item.Title = ex.Message;
+                Log(LogLevel.Error, $"[{tab.Name}] PR {pr.PullRequestId}: {ex.Message}");
+            }
+        }
+
+        int errors = tab.PrItems.Count - loaded;
+        Log(errors == 0 ? LogLevel.Info : LogLevel.Warning,
+            $"[{tab.Name}] {tab.PrItems.Count} 件中 {loaded} 件の PR 情報を取得しました（エラー {errors} 件）");
     }
+
+    private static string StatusText(string status) => status switch
+    {
+        "active" => "アクティブ",
+        "completed" => "完了",
+        "abandoned" => "破棄",
+        _ => status,
+    };
 
     private bool CanConfirm() => !IsRunning && SelectedTab.Count > 0;
 
@@ -248,8 +306,8 @@ public partial class MainViewModel : ObservableObject
             var categoryNode = root.Add(CategoryFolderName(tab.Category));
             foreach (var url in urls)
             {
-                var id = TryGetTrailingId(url);
-                var prNode = categoryNode.Add(id is null ? $"（URL 不正）{url}" : $"Pull Request {id}");
+                var pr = PrUrlParser.TryParse(url);
+                var prNode = categoryNode.Add(pr is null ? $"（URL 不正）{url}" : $"Pull Request {pr.PullRequestId}");
                 if (tab.Category == Category.Source)
                 {
                     prNode.Add("before");
@@ -274,13 +332,6 @@ public partial class MainViewModel : ObservableObject
         Category.Test => "デバッグ",
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };
-
-    /// <summary>URL 末尾の PR 番号を取り出す（表示用の簡易版。正式な解析は PrUrlParser で実装予定）。</summary>
-    private static int? TryGetTrailingId(string url)
-    {
-        var m = Regex.Match(url, @"/pullrequest/(\d+)/?(?:[?#].*)?$", RegexOptions.IgnoreCase);
-        return m.Success && int.TryParse(m.Groups[1].Value, out var id) ? id : null;
-    }
 
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
