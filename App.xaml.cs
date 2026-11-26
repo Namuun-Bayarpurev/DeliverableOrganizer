@@ -13,7 +13,7 @@ public partial class App : Application
 
         var window = new MainWindow();
         MainWindow = window;
-        window.DataContext = new MainViewModel(new DialogService());
+        window.DataContext = new MainViewModel(new DialogService(), new WindowsCredentialPatStore());
         window.Show();
     }
 }

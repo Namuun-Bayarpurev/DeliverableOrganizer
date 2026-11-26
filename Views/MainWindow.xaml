@@ -56,7 +56,7 @@
                                  ToolTip="空欄なら環境変数 AZDO_PAT → Git 資格情報の順に使用します" />
                     <CheckBox Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
                               Content="保存する" IsChecked="{Binding SavePat}"
-                              ToolTip="Windows 資格情報マネージャーに保存します（未実装）" />
+                              ToolTip="Windows 資格情報マネージャーに保存し、次回起動時に自動で入力します。オフにすると保存済みの PAT を削除します" />
                 </Grid>
 
                 <TextBlock Grid.Row="2" Text="ローカルリポジトリ" VerticalAlignment="Center" />

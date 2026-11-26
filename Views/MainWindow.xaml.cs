@@ -25,6 +25,18 @@ public partial class MainWindow : Window
                 });
             }
         };
+
+        // 保存済みの PAT を PasswordBox に表示する（PasswordBox はバインドできない）
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is MainViewModel vm)
+            {
+                PatBox.Password = vm.Pat;
+            }
+        };
+
+        // 終了時に、最後に入力した PAT を「保存する」の状態に合わせて保存または削除する
+        Closing += (_, _) => (DataContext as MainViewModel)?.PersistPat();
     }
 
     /// <summary>PasswordBox はバインドできないため、ここで ViewModel に渡す。</summary>

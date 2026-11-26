@@ -19,11 +19,13 @@ public partial class MainViewModel : ObservableObject
     private static readonly HttpClient Http = new();
 
     private readonly IDialogService _dialogs;
+    private readonly IPatStore _patStore;
     private CancellationTokenSource? _cts;
 
-    public MainViewModel(IDialogService dialogs)
+    public MainViewModel(IDialogService dialogs, IPatStore patStore)
     {
         _dialogs = dialogs;
+        _patStore = patStore;
 
         Tabs =
         [
@@ -37,6 +39,20 @@ public partial class MainViewModel : ObservableObject
         }
 
         _selectedTab = Tabs[0];
+
+        // 保存済みの PAT があれば復元し、「保存する」をオンにしておく（変更通知で消し直さないようフィールドに直接入れる）
+        try
+        {
+            if (_patStore.Load() is { Length: > 0 } saved)
+            {
+                Pat = saved;
+                _savePat = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Warning, $"保存済みの PAT を読み込めませんでした: {ex.Message}");
+        }
     }
 
     // ---- 共通設定（①〜③） ----
@@ -45,11 +61,34 @@ public partial class MainViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(RunOrCancelCommand), nameof(PreviewCommand))]
     private string _outputFolder = "";
 
-    /// <summary>② PAT。PasswordBox からコードビハインド経由で設定する。保存・ログ出力はしない。</summary>
+    /// <summary>② PAT。PasswordBox とはコードビハインド経由でやり取りする。ログには出さない。</summary>
     public string Pat { get; set; } = "";
 
+    /// <summary>「保存する」。オンにした時点と ［確認］［実行］・終了時に資格情報マネージャーへ保存し、オフにした時点で消す。</summary>
     [ObservableProperty]
     private bool _savePat;
+
+    partial void OnSavePatChanged(bool value) => PersistPat();
+
+    /// <summary>「保存する」の状態に合わせて PAT を保存または削除する。PAT が空なら保存済みのものも消す。</summary>
+    public void PersistPat()
+    {
+        try
+        {
+            if (SavePat && !string.IsNullOrWhiteSpace(Pat))
+            {
+                _patStore.Save(Pat.Trim());
+            }
+            else
+            {
+                _patStore.Delete();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Warning, $"PAT を資格情報マネージャーに{(SavePat ? "保存" : "削除")}できませんでした: {ex.Message}");
+        }
+    }
 
     [ObservableProperty]
     private string _localRepository = "";
@@ -130,6 +169,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanConfirm))]
     private async Task ConfirmAsync()
     {
+        PersistPat();
         var tab = SelectedTab;
         tab.PrItems.Clear();
 
@@ -256,6 +296,7 @@ public partial class MainViewModel : ObservableObject
     /// </summary>
     private async Task RunAsync()
     {
+        PersistPat();
         var jobs = Tabs.SelectMany(t => t.GetUrls().Select(u => (Tab: t, Url: u))).ToList();
 
         _cts = new CancellationTokenSource();

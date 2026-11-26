@@ -20,6 +20,7 @@ dotnet run --project C:\MOON_WORK\01_Tools\DeliverableOrganizer
 ビルドのみの場合は `dotnet build`。.NET 8 SDK が必要。Visual Studio では `DeliverableOrganizer.sln`（本体とテスト）を開く。
 
 PR 情報の取得には、対象リポジトリの読み取り権限（Code: Read）を持つ PAT が要る。画面の PAT 欄に入れるか、環境変数 `AZDO_PAT` に設定しておく（画面の入力が優先）。
+「保存する」をオンにすると、PAT を Windows 資格情報マネージャー（汎用資格情報 `DeliverableOrganizer:AzureDevOpsPat`）に保存し、次回起動時に PAT 欄へ自動で入る。保存はオンにした時点・［確認］［実行］時・終了時、オフにすると削除。
 
 ## exe の作成
 
@@ -58,6 +59,7 @@ DeliverableOrganizer/
 │  ├─ DialogService.cs           フォルダ選択、プレビュー表示、エラー表示、エクスプローラー起動
 │  ├─ PrUrlParser.cs             PR URL の解析（C1）
 │  ├─ CredentialProvider.cs      PAT の決定（C2。画面 → 環境変数 AZDO_PAT）
+│  ├─ PatStore.cs                PAT の保存・復元（Windows 資格情報マネージャー）
 │  ├─ AzureDevOpsClient.cs       REST API 呼び出し（C1。ページング、再試行 3 回）
 │  └─ PrLoader.cs                PR 情報を PrData にまとめる（C1。同じ PR は 1 回だけ取得）
 └─ tests/
@@ -75,7 +77,7 @@ DeliverableOrganizer/
 | No | 項目 | 状態 |
 |----|------|------|
 | 1 | 出力先フォルダ＋［参照］ | 実装済み（フォルダ選択ダイアログ） |
-| 2 | PAT（PasswordBox）＋「保存する」 | 入力のみ実装。保存は未実装 |
+| 2 | PAT（PasswordBox）＋「保存する」 | 実装済み（Windows 資格情報マネージャーに保存、起動時に復元） |
 | 3 | ローカルリポジトリ＋［参照］ | 実装済み（未入力時はヒント表示） |
 | 4 | 機能タブ | 実装済み。タブ名に登録件数を表示（空行・重複は数えない） |
 | 5 | PR URL 入力（複数行） | 実装済み |
@@ -148,7 +150,7 @@ DeliverableOrganizer/
 
 ### 7. その他
 - [ ] C5 プレビュー：PR 情報取得後の変更ファイルまでツリーに表示し、実際のファイル数を出す
-- [ ] PAT を Windows 資格情報マネージャーに保存（「保存する」チェック）
+- [x] PAT を Windows 資格情報マネージャーに保存（「保存する」チェック。`Services/PatStore.cs`）
 - [ ] 260 文字を超えるパスへの対応（`\\?\` 形式）
 - [ ] PR フォルダ名の書式設定（既定 `Pull Request {id}`）
 - [ ] 単体テスト（URL 解析と PR 情報取得は作成済み。パターン一致、出力パスの組み立てが残り）
