@@ -93,6 +93,18 @@ public sealed class AzureDevOpsClient
         return commits;
     }
 
+    /// <summary>コミット時点のファイル内容（バイト列のまま。文字コード・改行は変換しない）。</summary>
+    /// <param name="path">リポジトリ内パス（例: /src/a.cs）</param>
+    /// <param name="commitSha">取得するコミットの SHA</param>
+    internal async Task<byte[]> GetItemContentAsync(PrRef pr, string path, string commitSha, CancellationToken ct)
+    {
+        string url = $"{RepoUrl(pr)}/items?path={Uri.EscapeDataString(path)}"
+            + $"&versionDescriptor.version={Uri.EscapeDataString(commitSha)}&versionDescriptor.versionType=commit"
+            + $"&$format=octetStream&download=true&api-version={ApiVersion}";
+        using var response = await SendAsync(url, ct);
+        return await response.Content.ReadAsByteArrayAsync(ct);
+    }
+
     private static ChangeType ToChangeType(string? changeType)
     {
         // "edit, rename" のように組み合わせで返ることがある
@@ -103,9 +115,11 @@ public sealed class AzureDevOpsClient
             : ChangeType.Edit;
     }
 
+    private static string RepoUrl(PrRef pr) =>
+        $"{pr.BaseUrl}/{Uri.EscapeDataString(pr.Project)}/_apis/git/repositories/{Uri.EscapeDataString(pr.Repository)}";
+
     private static string PrUrl(PrRef pr, string path, string query = "") =>
-        $"{pr.BaseUrl}/{Uri.EscapeDataString(pr.Project)}/_apis/git/repositories/{Uri.EscapeDataString(pr.Repository)}"
-        + $"/pullRequests/{pr.PullRequestId}{path}?{(query.Length == 0 ? "" : query + "&")}api-version={ApiVersion}";
+        $"{RepoUrl(pr)}/pullRequests/{pr.PullRequestId}{path}?{(query.Length == 0 ? "" : query + "&")}api-version={ApiVersion}";
 
     private async Task<T> GetJsonAsync<T>(string url, CancellationToken ct)
     {
@@ -159,6 +173,7 @@ public sealed class AzureDevOpsClient
             string where = url[..url.IndexOf('?')];
             string message = status switch
             {
+                HttpStatusCode.NotFound when where.EndsWith("/items", StringComparison.Ordinal) => "ファイルが見つかりません（404）",
                 HttpStatusCode.NotFound => $"PR が見つかりません（404）: {where}",
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NonAuthoritativeInformation
                     => $"認証に失敗しました（{(int)status}）。PAT の権限（Code: Read）を確認してください。",

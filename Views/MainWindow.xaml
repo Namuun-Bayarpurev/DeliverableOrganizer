@@ -198,13 +198,10 @@
         </StackPanel>
 
         <!-- ⑮ 進捗 -->
+        <!-- バーは全幅にし、件数と % をバーの中央に重ねる（右に別欄を取るとバーが途中で終わって見える） -->
         <Grid Grid.Row="4" Margin="0,12,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="80" />
-            </Grid.ColumnDefinitions>
-            <ProgressBar Height="10" Minimum="0" Maximum="{Binding ProgressMax}" Value="{Binding ProgressValue}" />
-            <TextBlock Grid.Column="1" HorizontalAlignment="Right" Foreground="{StaticResource SubTextBrush}"
+            <ProgressBar Height="18" Minimum="0" Maximum="{Binding ProgressMax}" Value="{Binding ProgressValue}" />
+            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11"
                        Text="{Binding ProgressText}" />
         </Grid>
 

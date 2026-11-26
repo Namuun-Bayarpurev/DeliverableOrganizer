@@ -20,6 +20,7 @@ public partial class MainViewModel : ObservableObject
 
     private readonly IDialogService _dialogs;
     private readonly IPatStore _patStore;
+    private readonly SynchronizationContext? _ui = SynchronizationContext.Current;
     private CancellationTokenSource? _cts;
 
     public MainViewModel(IDialogService dialogs, IPatStore patStore)
@@ -139,11 +140,31 @@ public partial class MainViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ProgressText))]
     private int _progressMax = 1;
 
-    public string ProgressText => IsRunning || HasCompleted ? $"{ProgressValue} / {ProgressMax}" : "";
+    /// <summary>例: 1 / 2（50%）。実行前は空。</summary>
+    public string ProgressText => IsRunning || HasCompleted
+        ? $"{ProgressValue} / {ProgressMax}（{(ProgressMax == 0 ? 0 : ProgressValue * 100 / ProgressMax)}%）"
+        : "";
 
     public ObservableCollection<LogEntry> Logs { get; } = [];
 
     public void Log(LogLevel level, string message) => Logs.Add(new LogEntry(DateTime.Now, level, message));
+
+    /// <summary>並列で取得している途中（別スレッド）から呼べるログ。画面のスレッドに戻して追加する。</summary>
+    private void LogFromAnyThread(LogLevel level, string message)
+    {
+        var entry = new LogEntry(DateTime.Now, level, message);
+        if (_ui is null || SynchronizationContext.Current == _ui)
+        {
+            lock (Logs)
+            {
+                Logs.Add(entry);
+            }
+        }
+        else
+        {
+            _ui.Post(_ => Logs.Add(entry), null);
+        }
+    }
 
     // ---- コマンド ----
 
@@ -202,7 +223,7 @@ public partial class MainViewModel : ObservableObject
                 var data = await loader.LoadAsync(pr);
                 item.Title = data.Title;
                 item.Branch = $"{data.SourceBranch} → {data.TargetBranch}";
-                item.Status = StatusText(data.Status);
+                item.Status = PrInfoWriter.StatusText(data.Status);
                 item.FileCount = data.Changes.Count;
                 loaded++;
             }
@@ -233,14 +254,6 @@ public partial class MainViewModel : ObservableObject
         Log(errors == 0 ? LogLevel.Info : LogLevel.Warning,
             $"[{tab.Name}] {tab.PrItems.Count} 件中 {loaded} 件の PR 情報を取得しました（エラー {errors} 件）");
     }
-
-    private static string StatusText(string status) => status switch
-    {
-        "active" => "アクティブ",
-        "completed" => "完了",
-        "abandoned" => "破棄",
-        _ => status,
-    };
 
     private bool CanConfirm() => !IsRunning && SelectedTab.Count > 0;
 
@@ -291,37 +304,124 @@ public partial class MainViewModel : ObservableObject
     // ---- 実行処理 ----
 
     /// <summary>
-    /// 全タブの PR を一括処理する。
-    /// 現時点では画面動作確認用の仮実装で、ファイルの取得・書き込みは行わない。
+    /// 全タブの PR を一括処理する。1 件の PR・1 ファイルの失敗では止めず、認証エラーだけは全体を止める。
     /// </summary>
+    /// <remarks>shortcut: 仕様書・テストタブ（F2・F3）は未実装のため、警告を出してスキップする</remarks>
     private async Task RunAsync()
     {
         PersistPat();
+
+        // 出力先が使えなければ何も始めない
+        var check = OutputFolderValidator.Check(OutputFolder);
+        if (check.Error is not null)
+        {
+            Log(LogLevel.Error, check.Error.Replace('\n', ' '));
+            _dialogs.ShowError(check.Error);
+            return;
+        }
+
+        if (check.Created)
+        {
+            Log(LogLevel.Info, $"出力先フォルダを作成しました: {OutputFolder.Trim()}");
+        }
+
+        var options = new ExportOptions
+        {
+            OutputFolder = OutputFolder.Trim(),
+            LocalRepository = string.IsNullOrWhiteSpace(LocalRepository) ? null : LocalRepository.Trim(),
+            WritePrInfo = WritePrInfo,
+            ExistingFolder = ExistingFolder,
+        };
         var jobs = Tabs.SelectMany(t => t.GetUrls().Select(u => (Tab: t, Url: u))).ToList();
 
+        // 1 回の実行につき PrLoader を 1 つ使う（同じ PR を何度も取得しない）
+        var client = new AzureDevOpsClient(Http, CredentialProvider.ResolvePat(Pat));
+        var loader = new PrLoader(client);
+        var codeExporter = new CodeExporter(new ApiContentSource(client), LogFromAnyThread);
+
         _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
         IsRunning = true;
         HasCompleted = false;
         ProgressValue = 0;
         ProgressMax = Math.Max(jobs.Count, 1);
-        Log(LogLevel.Info, $"=== 実行開始（{jobs.Count} 件）");
-        Log(LogLevel.Warning, "出力処理は未実装のため、ファイルは書き込みません（画面動作の確認用）");
+        Log(LogLevel.Info, $"=== 実行開始（{jobs.Count} 件）→ {options.OutputFolder}");
 
+        int exported = 0, skipped = 0, errors = 0, warnings = 0;
+        var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             foreach (var (tab, url) in jobs)
             {
-                _cts.Token.ThrowIfCancellationRequested();
-                await Task.Delay(400, _cts.Token);
-                Log(LogLevel.Info, $"[{tab.Name}] {url}");
-                ProgressValue++;
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var pr = PrUrlParser.TryParse(url);
+                    if (pr is null)
+                    {
+                        errors++;
+                        Log(LogLevel.Error, $"[{tab.Name}] URL の形式が不正です: {url}");
+                        continue;
+                    }
+
+                    if (tab.Category != Category.Source)
+                    {
+                        warnings++;
+                        Log(LogLevel.Warning, $"[{tab.Name}] PR {pr.PullRequestId}: このタブの出力はまだ実装していないためスキップしました");
+                        continue;
+                    }
+
+                    // 書き方の違う同じ PR の URL は 1 回だけ出力する
+                    if (!done.Add($"{tab.Category}|{pr.BaseUrl}/{pr.Project}/{pr.Repository}/{pr.PullRequestId}"))
+                    {
+                        continue;
+                    }
+
+                    var data = await loader.LoadAsync(pr, ct);
+                    Log(LogLevel.Info, $"[{tab.Name}] PR {pr.PullRequestId}: 出力中（変更ファイル {data.Changes.Count} 件）");
+                    var result = await codeExporter.ExportAsync(data, options, ct);
+                    warnings += result.Warnings;
+                    if (result.Skipped)
+                    {
+                        skipped++;
+                    }
+                    else
+                    {
+                        exported++;
+                        Log(LogLevel.Info, $"[{tab.Name}] PR {pr.PullRequestId}: {result.Files} ファイルを出力しました → {result.Folder}");
+                    }
+                }
+                catch (AzureDevOpsException ex) when (ex.IsAuthError)
+                {
+                    // 認証エラーは他の PR でも同じなので全体を止める
+                    errors++;
+                    Log(LogLevel.Error, $"[{tab.Name}] {ex.Message}");
+                    Log(LogLevel.Error, "=== 認証エラーのため中断しました");
+                    _dialogs.ShowError(ex.Message);
+                    return;
+                }
+                catch (AzureDevOpsException ex)
+                {
+                    errors++;
+                    Log(LogLevel.Error, $"[{tab.Name}] {url}: {ex.Message}");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    errors++;
+                    Log(LogLevel.Error, $"[{tab.Name}] {url}: PR フォルダに書き込めませんでした（ファイルを開いていないか確認してください）: {ex.Message}");
+                }
+                finally
+                {
+                    ProgressValue++;
+                }
             }
 
-            Log(LogLevel.Info, "=== 完了しました（エラー 0 件）");
+            Log(errors > 0 ? LogLevel.Error : warnings > 0 ? LogLevel.Warning : LogLevel.Info,
+                $"=== 完了しました（出力 {exported} 件、スキップ {skipped} 件、エラー {errors} 件、警告 {warnings} 件）");
         }
         catch (OperationCanceledException)
         {
-            Log(LogLevel.Warning, "中止しました");
+            Log(LogLevel.Warning, $"=== 中止しました（出力 {exported} 件、エラー {errors} 件、警告 {warnings} 件）");
         }
         finally
         {

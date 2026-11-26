@@ -8,8 +8,8 @@ Azure DevOps の Pull Request（PR）の URL を入力するだけで、納品�
 
 ## 現在の状態
 
-**土台・画面と PR 情報の取得（C1）を実装済み（2026-11-25 時点）。** ファイルの出力はまだ行わない。
-［確認］は Azure DevOps から PR 情報を取得して PR 一覧に表示する。［実行］は画面の動作確認用の仮の動きになっている。
+**土台・画面、PR 情報の取得（C1）、ソースの整理（F1）を実装済み（2026-11-26 時点）。**
+［確認］は Azure DevOps から PR 情報を取得して PR 一覧に表示する。［実行］は「ソースの整理」タブの PR を `<出力先>\コード\Pull Request {id}\before`／`after` に出力する。仕様書・テストタブ（F2・F3）は未実装で、［実行］では警告を出してスキップする。
 
 ## 起動方法
 
@@ -36,7 +36,7 @@ dotnet publish DeliverableOrganizer.csproj -c Release -r win-x64 --self-containe
 dotnet test tests\DeliverableOrganizer.Tests
 ```
 
-URL 解析と、偽の HTTP 応答を使った PR 情報取得（ページング、再試行、認証エラー）の単体テスト。Azure DevOps には接続しない。
+URL 解析、偽の HTTP 応答を使った PR 情報取得（ページング、再試行、認証エラー）、ソース出力（振り分け・既存フォルダ・パス変換）、出力先の確認、PAT 保存の単体テスト。Azure DevOps には接続しない（PAT 保存の 1 件だけ、テスト専用の名前で資格情報マネージャーを読み書きする）。
 
 ## フォルダ構成
 
@@ -61,7 +61,11 @@ DeliverableOrganizer/
 │  ├─ CredentialProvider.cs      PAT の決定（C2。画面 → 環境変数 AZDO_PAT）
 │  ├─ PatStore.cs                PAT の保存・復元（Windows 資格情報マネージャー）
 │  ├─ AzureDevOpsClient.cs       REST API 呼び出し（C1。ページング、再試行 3 回）
-│  └─ PrLoader.cs                PR 情報を PrData にまとめる（C1。同じ PR は 1 回だけ取得）
+│  ├─ PrLoader.cs                PR 情報を PrData にまとめる（C1。同じ PR は 1 回だけ取得）
+│  ├─ ContentSource.cs           ファイル内容の取得（C3。今は Items API のみ）
+│  ├─ CodeExporter.cs            ソースの整理（F1。before／after、既存フォルダの扱い C6）
+│  ├─ PrInfoWriter.cs            _PR情報.txt（C4）
+│  └─ OutputFolderValidator.cs   出力先フォルダの確認（書式・ドライブ・書き込み可否。なければ作成）
 └─ tests/
    └─ DeliverableOrganizer.Tests/  xUnit（本体の csproj は tests\ 配下を取り込まない設定にしている）
 ```
@@ -88,7 +92,7 @@ DeliverableOrganizer/
 | 10 | _PR情報.txt を出力 | 実装済み（既定 ON） |
 | 11 | 既存フォルダ | 実装済み（上書き／削除して再作成／スキップ、既定は削除して再作成） |
 | 12 | ［プレビュー］ | 実装済み。ツリーはカテゴリ／PR フォルダまで（変更ファイルは未表示） |
-| 13 | ［実行］／［中止］ | 切替と中止は実装済み。出力処理は仮実装 |
+| 13 | ［実行］／［中止］ | 実装済み（ソースの整理のみ出力。仕様書・テストはスキップ） |
 | 14 | ［出力先を開く］ | 実装済み（完了後に有効、エクスプローラーで開く） |
 | 15 | 進捗バー | 実装済み（処理済み件数／全体） |
 | 16 | ログ | 画面表示は実装済み（警告はオレンジ、エラーは赤、自動スクロール）。ファイル出力は未実装 |
@@ -105,10 +109,10 @@ DeliverableOrganizer/
 
 ### 1. PR 情報の取得（C1）
 - [x] `PrUrlParser`：dev.azure.com／*.visualstudio.com（DefaultCollection 付き、プロジェクト省略形も可）の URL から組織・プロジェクト・リポジトリ・PR 番号を取り出す
-- [ ] 形式が正しくない URL は実行対象から外す（今はタブの件数に含めている。［実行］の本実装と合わせて対応）
+- [ ] 形式が正しくない URL をタブの件数から外す（［実行］ではエラーとしてログに出し、スキップ済み）
 - [x] `AzureDevOpsClient`：REST API（api-version 7.1、Basic 認証）、HttpClient、再試行 3 回（通信エラー・5xx・429）
   - `pullrequests/{id}`、`iterations`、`iterations/{n}/changes?$compareTo=0`（2000 件ごとのページング、フォルダは除外）、`commits`（継続トークンでページング）
-  - `items`（ファイル内容・全ファイル一覧）は C3 で追加する
+  - `items`（ファイル内容）は追加済み。全ファイル一覧（`recursionLevel=Full`）は F3 の確認事項が決まってから
 - [x] `PrLoader`：PR・修正前 SHA（commonRefCommit）・修正後 SHA（sourceRefCommit）・変更一覧・コミット履歴（古い順）を `PrData` にまとめる
 - [x] ［確認］を本実装に置き換え、PR 一覧にタイトル・ブランチ・状態・変更ファイル数を表示
 - [x] 同じ PR は 1 回だけ取得する（`PrLoader` が 1 回の操作の中で結果を使い回す。［実行］でも 1 回の実行につき `PrLoader` を 1 つ作って使うこと）
@@ -116,25 +120,26 @@ DeliverableOrganizer/
 ### 2. 認証（C2）
 - [x] `CredentialProvider`：画面の PAT → 環境変数 `AZDO_PAT` の順に使う
 - [ ] `git credential fill` を 3 番目の手段として追加する
-- [x] 認証エラー（401／403／203）で処理を中断し、「PAT の権限（Code: Read）を確認」ダイアログを出す（［確認］。［実行］は本実装時に `AzureDevOpsException.IsAuthError` で同様に止める）
+- [x] 認証エラー（401／403／203）で処理を中断し、「PAT の権限（Code: Read）を確認」ダイアログを出す（［確認］［実行］とも）
 - [x] PAT をログに出さない（例外メッセージ・ログに PAT を含めていない）
 
 ### 3. ファイル取得（C3）
-- [ ] `IContentSource` / `GitContentSource`：`git cat-file blob {SHA}:{path}` で取得。コミットが無ければ `git fetch`
-- [ ] `ApiContentSource`：`items?path=…&versionDescriptor.version={SHA}&$format=octetStream`
+- [x] `IContentSource`
+- [ ] `GitContentSource`：`git cat-file blob {SHA}:{path}` で取得。コミットが無ければ `git fetch`
+- [x] `ApiContentSource`：`items?path=…&versionDescriptor.version={SHA}&$format=octetStream`
 - [ ] git を優先し、失敗したら API で取得
-- [ ] `SemaphoreSlim` で同時取得を 4 件までに制限
+- [x] 同時取得を 4 件までに制限（`Parallel.ForEachAsync`、`ExportOptions.MaxParallel`）
 
 ### 4. 出力（F1〜F3、C4、C6）
-- [ ] `CodeExporter`（F1）：`コード\Pull Request {id}\before`／`after` に出力
+- [x] `CodeExporter`（F1）：`コード\Pull Request {id}\before`／`after` に出力
   - 修正＝両方、追加＝after のみ、削除＝before のみ、名前変更＝旧パスで before／新パスで after
 - [ ] `DocumentExporter`（F2・F3）：修正後のファイルを PR フォルダ直下に出力（削除ファイルは出力しない）
   - 仕様書 → `仕様書\`、テスト → `デバッグ\`
   - 対象パターン（カンマ区切り、例 `*.xlsx, */テスト仕様書/*`）で絞り込み
-- [ ] `_PR情報.txt`（C4）：コミット履歴（古い順）と変更一覧
-- [ ] 既存フォルダの扱い（C6）：上書き／削除して再作成／スキップ
-- [ ] リポジトリ内のフォルダ構成を維持し、内容はそのまま書き込む（文字コード・改行コードは変換しない）
-- [ ] 仮実装の `MainViewModel.RunAsync` を本実装に置き換える
+- [x] `_PR情報.txt`（C4）：PR の概要、コミット履歴（古い順）と変更一覧。UTF-8（BOM 付き）・CRLF
+- [x] 既存フォルダの扱い（C6）：上書き／削除して再作成／スキップ
+- [x] リポジトリ内のフォルダ構成を維持し、内容はそのまま書き込む（文字コード・改行コードは変換しない）
+- [x] 仮実装の `MainViewModel.RunAsync` を本実装に置き換える（F1 のみ。F2・F3 は `DocumentExporter` を作って呼ぶ）
 
 ### 5. ログ・設定（C7）
 - [ ] `FileLogger`：画面と同じ内容を `<出力先>\_log\yyyyMMdd_HHmmss.log`（UTF-8）に出力
@@ -142,18 +147,18 @@ DeliverableOrganizer/
   - キー：OutputFolder, LocalRepository, SpecPatterns, TestPatterns, TestScope, WritePrInfo, ExistingFolder, PrFolderFormat, MaxParallel
 
 ### 6. エラー処理（設計書 9 章）
-- [ ] 1 件の PR や 1 ファイルの失敗で全体を止めず、完了時にエラー件数を報告
-- [ ] PR が存在しない（404）・通信エラー → その PR をスキップしてログにエラー
-- [ ] ファイル取得失敗 → そのファイルだけスキップしてログに警告
-- [ ] 出力先に書き込めない → 中断してエラーダイアログ
-- [ ] ［中止］時は処理中のファイルを書き終えてから停止
+- [x] 1 件の PR や 1 ファイルの失敗で全体を止めず、完了時にエラー件数を報告
+- [x] PR が存在しない（404）・通信エラー → その PR をスキップしてログにエラー
+- [x] ファイル取得失敗 → そのファイルだけスキップしてログに警告
+- [x] 出力先に書き込めない → 中断してエラーダイアログ（［実行］前に `OutputFolderValidator` で確認。絶対パスでない・使えない文字・ドライブがない・ファイル・書き込めない場合。フォルダがなければ作成する）
+- [x] ［中止］時は処理中のファイルを書き終えてから停止
 
 ### 7. その他
 - [ ] C5 プレビュー：PR 情報取得後の変更ファイルまでツリーに表示し、実際のファイル数を出す
 - [x] PAT を Windows 資格情報マネージャーに保存（「保存する」チェック。`Services/PatStore.cs`）
 - [ ] 260 文字を超えるパスへの対応（`\\?\` 形式）
 - [ ] PR フォルダ名の書式設定（既定 `Pull Request {id}`）
-- [ ] 単体テスト（URL 解析と PR 情報取得は作成済み。パターン一致、出力パスの組み立てが残り）
+- [ ] 単体テスト（URL 解析、PR 情報取得、出力パスの組み立ては作成済み。パターン一致が残り）
 - [ ] 配布設定（単一 exe）
 
 ### 確認事項が決まってから実装するもの（設計書 10 章）
