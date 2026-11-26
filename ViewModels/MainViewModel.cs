@@ -337,7 +337,8 @@ public partial class MainViewModel : ObservableObject
         // 1 回の実行につき PrLoader を 1 つ使う（同じ PR を何度も取得しない）
         var client = new AzureDevOpsClient(Http, CredentialProvider.ResolvePat(Pat));
         var loader = new PrLoader(client);
-        var codeExporter = new CodeExporter(new ApiContentSource(client), LogFromAnyThread);
+        IContentSource api = new ApiContentSource(client);
+        GitContentSource? git = null;
 
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
@@ -351,6 +352,23 @@ public partial class MainViewModel : ObservableObject
         var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            // ローカルリポジトリが指定されていれば git から取得し、取れないファイルだけ API で取得する
+            if (options.LocalRepository is { } repo)
+            {
+                if (await GitContentSource.IsRepositoryAsync(repo))
+                {
+                    git = new GitContentSource(repo, api, LogFromAnyThread);
+                    Log(LogLevel.Info, $"ローカルリポジトリから取得します: {repo}");
+                }
+                else
+                {
+                    warnings++;
+                    Log(LogLevel.Warning, $"ローカルリポジトリが git リポジトリではない（または git が見つからない）ため、API で取得します: {repo}");
+                }
+            }
+
+            var codeExporter = new CodeExporter(git ?? api, LogFromAnyThread);
+
             foreach (var (tab, url) in jobs)
             {
                 ct.ThrowIfCancellationRequested();
@@ -414,6 +432,11 @@ public partial class MainViewModel : ObservableObject
                 {
                     ProgressValue++;
                 }
+            }
+
+            if (git is not null)
+            {
+                Log(LogLevel.Info, $"ファイルの取得元: ローカル git {git.FromGit} 件、API {git.FromApi} 件");
             }
 
             Log(errors > 0 ? LogLevel.Error : warnings > 0 ? LogLevel.Warning : LogLevel.Info,

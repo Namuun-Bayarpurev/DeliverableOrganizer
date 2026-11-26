@@ -62,7 +62,8 @@ DeliverableOrganizer/
 │  ├─ PatStore.cs                PAT の保存・復元（Windows 資格情報マネージャー）
 │  ├─ AzureDevOpsClient.cs       REST API 呼び出し（C1。ページング、再試行 3 回）
 │  ├─ PrLoader.cs                PR 情報を PrData にまとめる（C1。同じ PR は 1 回だけ取得）
-│  ├─ ContentSource.cs           ファイル内容の取得（C3。今は Items API のみ）
+│  ├─ ContentSource.cs           ファイル内容の取得（C3。Items API）
+│  ├─ GitContentSource.cs        ローカルリポジトリからの取得（C3。git cat-file、なければ fetch、だめなら API）
 │  ├─ CodeExporter.cs            ソースの整理（F1。before／after、既存フォルダの扱い C6）
 │  ├─ PrInfoWriter.cs            _PR情報.txt（C4）
 │  └─ OutputFolderValidator.cs   出力先フォルダの確認（書式・ドライブ・書き込み可否。なければ作成）
@@ -125,9 +126,11 @@ DeliverableOrganizer/
 
 ### 3. ファイル取得（C3）
 - [x] `IContentSource`
-- [ ] `GitContentSource`：`git cat-file blob {SHA}:{path}` で取得。コミットが無ければ `git fetch`
+- [x] `GitContentSource`：`git cat-file blob {SHA}:{path}` で取得。コミットが無ければ PR のリポジトリを指すリモート（origin 優先）から `git fetch {remote} {SHA}`（ソースの整理のみ対応）
+  - 作業ツリー・ブランチ・HEAD は変更しない。SHA 指定なので、別のリポジトリを指定しても内容を取り違えない
+  - 完了時に「ローカル git n 件、API m 件」をログに出す
 - [x] `ApiContentSource`：`items?path=…&versionDescriptor.version={SHA}&$format=octetStream`
-- [ ] git を優先し、失敗したら API で取得
+- [x] git を優先し、失敗したら API で取得（git リポジトリでない・git がない場合は最初から API）
 - [x] 同時取得を 4 件までに制限（`Parallel.ForEachAsync`、`ExportOptions.MaxParallel`）
 
 ### 4. 出力（F1〜F3、C4、C6）
